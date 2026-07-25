@@ -1,0 +1,46 @@
+{
+  "name": "team-site-template",
+  "private": true,
+  "sideEffects": false,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "start": "bun run serve.ts",
+    "publish": "bash ./publish.sh",
+    "go-live": "bash ./go-live.sh",
+    "format": "prettier --write .",
+    "cap:sync": "bunx cap sync",
+    "cap:ios": "bunx cap open ios",
+    "cap:android": "bunx cap open android",
+    "cap:build": "bun run build && bash scripts/generate-capacitor-html.sh && bunx cap sync"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/cli": "^8.4.2",
+    "@capacitor/core": "^8.4.2",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/ios": "^8.4.2",
+    "@capacitor/push-notifications": "^8.1.2",
+    "@capacitor/share": "^8.0.1",
+    "@capacitor/splash-screen": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.3",
+    "@neondatabase/serverless": "^1.1.0",
+    "@tanstack/react-router": "^1.158.1",
+    "@tanstack/react-start": "^1.158.3",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/node": "^25.3.0",
+    "@types/react": "^19.2.13",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.3",
+    "prettier": "^3.8.1",
+    "tailwindcss": "^4.1.18",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "vite-tsconfig-paths": "^6.0.5"
+  }
+}
