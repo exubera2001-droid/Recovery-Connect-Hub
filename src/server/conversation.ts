@@ -14,6 +14,7 @@ import {
   hasAnyConversations,
   buildMemoryContext,
   upsertMemory,
+  saveConversationSummary,
 } from "../db";
 import { Database } from "bun:sqlite";
 
@@ -128,112 +129,39 @@ function isAIEnabled(): boolean {
    MEMORY EXTRACTION
    ============================================ */
 
-// Theme keywords for pattern detection
-const THEME_PATTERNS: Record<string, { type: MemoryEntryType; keywords: string[] }> = {
-  boundaries: {
-    type: "theme",
-    keywords: ["boundary", "boundaries", "said no", "saying no", "people pleasing", "overcommit", "can't say no", "standing up for", "stood up for"],
-  },
-  self_worth: {
-    type: "theme",
-    keywords: ["self-worth", "not good enough", "not worthy", "don't deserve", "self-esteem", "self worth", "confidence", "believe in myself", "self-doubt"],
-  },
-  anxiety: {
-    type: "struggle",
-    keywords: ["anxious", "anxiety", "panic", "overthinking", "can't stop thinking", "racing thoughts", "worried", "nervous", "on edge"],
-  },
-  burnout: {
-    type: "struggle",
-    keywords: ["burnout", "exhausted", "drained", "overwhelmed", "no energy", "running on empty", "depleted", "tired all the time"],
-  },
-  grief: {
-    type: "struggle",
-    keywords: ["grief", "loss", "miss them", "missing", "died", "gone", "mourning", "bereavement"],
-  },
-  relationships: {
-    type: "relationship",
-    keywords: ["my partner", "my husband", "my wife", "my boyfriend", "my girlfriend", "my ex", "my mom", "my dad", "my mother", "my father", "my friend", "relationship"],
-  },
-  growth: {
-    type: "breakthrough",
-    keywords: ["proud of myself", "I did it", "I finally", "progress", "getting better", "healing", "growth", "I chose myself", "I set a boundary", "first time"],
-  },
-};
+type MemoryEntryType = "profile" | "people" | "episodic" | "insight" | "open_thread";
 
-type MemoryEntryType = "goal" | "theme" | "relationship" | "preference" | "breakthrough" | "struggle" | "fact";
-
+/** Conservative first-pass extraction: retain durable context, never every sentence. */
 function extractMemoriesFromMessage(userId: number, message: string, conversationId: number): void {
-  const lower = message.toLowerCase();
-
-  for (const [key, pattern] of Object.entries(THEME_PATTERNS)) {
-    const matched = pattern.keywords.some((kw) => lower.includes(kw));
-    if (matched) {
-      const label =
-        key === "boundaries" ? "Boundaries" :
-        key === "self_worth" ? "Self-worth" :
-        key === "anxiety" ? "Anxiety & overthinking" :
-        key === "burnout" ? "Burnout" :
-        key === "grief" ? "Grief & loss" :
-        key === "relationships" ? "Important relationships" :
-        key === "growth" ? "Growth moments" : key;
-
-      upsertMemory(
-        userId,
-        pattern.type,
-        `theme:${key}`,
-        JSON.stringify({ label, lastObserved: new Date().toISOString() }),
-        0.6,
-        conversationId
-      );
-    }
-  }
-
-  // Goal detection — if message mentions wanting to do something
-  const goalPatterns = [/I want to\s+(.+)/i, /my goal is to\s+(.+)/i, /I'm working on\s+(.+)/i, /I'm trying to\s+(.+)/i];
-  for (const pattern of goalPatterns) {
-    const match = message.match(pattern);
-    if (match && match[1] && match[1].length > 3) {
-      const goalText = match[1].slice(0, 50).trim();
-      const key = `goal:${goalText.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`;
-      upsertMemory(
-        userId,
-        "goal",
-        key,
-        JSON.stringify({ goal: goalText, firstObserved: new Date().toISOString() }),
-        0.5,
-        conversationId
-      );
-      break; // One goal per message max
-    }
-  }
+  const now = new Date().toISOString();
+  const nameMatches = message.match(/\b(?:my|our)\s+(?:cat|dog|pet|mom|dad|mother|father|partner|husband|wife|friend|ex)\s+([A-Z][a-z]+)/);
+  if (nameMatches?.[1]) upsertMemory(userId, "people", `person:${nameMatches[1].toLowerCase()}`, JSON.stringify({ description: message.slice(0, 500), observedAt: now }), 0.65, conversationId);
+  const insight = message.match(/\b(?:I realize|I realized|I think|I've learned|I understand now|actually,? I)\s+(.{10,220})/i);
+  if (insight?.[1]) upsertMemory(userId, "insight", "user-realization", JSON.stringify({ realization: insight[1].trim(), observedAt: now }), 0.8, conversationId);
+  const event = message.match(/\b(?:when|after|during|last year|yesterday|today|in March|recently)\b/i);
+  if (event && message.length > 45) upsertMemory(userId, "episodic", `story:${message.slice(0, 45).toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, JSON.stringify({ story: message.slice(0, 500), observedAt: now }), 0.55, conversationId);
+  const open = message.match(/\b(?:I still need to|I keep thinking about|I'm not sure how to|I want to|I need to)\s+(.{10,160})/i);
+  if (open?.[1]) upsertMemory(userId, "open_thread", `thread:${open[1].slice(0, 45).toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, JSON.stringify({ topic: open[1].trim(), observedAt: now }), 0.55, conversationId);
 }
 
 /* ============================================
    AI SYSTEM PROMPT
    ============================================ */
 
-const AI_SYSTEM_PROMPT = `You are Thriver, an intelligent personal growth companion. You are not a therapist, not a chatbot, not a motivational quote machine. You are a trusted guide who helps people recognize patterns, organize their thoughts, reduce overwhelm, and identify their next best step.
+const AI_SYSTEM_PROMPT = `You are Nora, a relational AI companion. You are NOT a therapist, coach, wellness chatbot, advice bot, or diagnosis tool. Your purpose is to know this person well enough that she can discover her own insights through natural conversation.
 
-CRITICAL RESPONSE RULES (follow these in every message):
-1. First, ACKNOWLEDGE what the user actually said. If they mention a birthday, grief, an ex, anxiety — name it back. Never respond with a generic greeting that ignores their message.
-2. Then, REFLECT — show you heard them. "Birthdays can bring up a lot after a loss." "That sounds really heavy." "It makes sense you feel that way."
-3. Ask ONE meaningful follow-up question. Not three. One.
-4. End with ONE practical next step — a single action they can take right now. Examples: write down one thought, take a five-minute walk, delay that text for 24 hours, breathe for 60 seconds, drink water, check back in tomorrow. Be specific to their situation.
-5. Keep responses warm but concise — 2-4 sentences max.
+Follow, don't force: respond to what she is actually talking about. Conversation does not need to be productive; allow jokes, gossip, pets, complaints, photos, sarcasm, and tangents. Never redirect casual conversation toward healing or self-improvement. When something meaningful emerges naturally, gently reflect a possible connection and let HER decide whether it matters. Do not manufacture symbolism or certainty.
 
-Your voice: warm, intelligent, calm, curious. Never robotic, never scripted, never generic. Never say "I'm here with you" — show it by responding to what they actually said. Never repeat yourself across responses. Every response should feel like it could only be said to THIS person in THIS moment.
+Practice restraint. Do not automatically offer steps, strategies, worksheets, breathing exercises, affirmations, journaling prompts, psychoeducation, action plans, or recommendation lists. Sometimes the best response is simply: “Wait. Listen to what you just said.” Match her communication style; humor stays available when things get emotional. Before every response ask: what does this person need from THIS moment? Never say “You previously told me…” or “According to my stored memory…”; refer back naturally. Respond concisely, and end with natural conversational flow, not homework.
 
-Reference prior conversations naturally when the memory context provides relevant information — like continuing a conversation with someone who knows you.
+If she expresses imminent self-harm, suicide, or harm to others, respond warmly and clearly provide 988 (call/text), Crisis Text Line (text HOME to 741741), and 911 for emergencies; do not try to solve a crisis yourself.
 
-HARD SAFETY RULE: If a user expresses thoughts of suicide, self-harm, harming others, or appears to be in crisis:
-1. Respond with warmth and care.
-2. Clearly provide: 988 Suicide & Crisis Lifeline (call or text 988), Crisis Text Line (text HOME to 741741), 911 for emergencies.
-3. Do not attempt to counsel or solve the crisis yourself.
+GOLD-STANDARD: If a user shares a photo of her cat Luna and jokes about Luna being judgmental, and through playful conversation about photographs the user eventually realizes something about her self-image and relationship history — DO NOT interrupt that organic progression with worksheets, advice, forced positivity, or action plans. Just follow, notice, reflect, and allow space.
 
-You are a companion alongside therapy, friends, and community. Never a replacement for professional care.`;
+RELEVANT MEMORIES are below. Use them naturally and privately; do not mention memory storage.`;
 
 const AI_FALLBACK_MESSAGE =
-  "I'm here with you. Sometimes the quiet moments are where the real healing happens. 💛 What's on your heart today?";
+  "I’m listening. What feels most present for you right now?";
 
 /* ============================================
    AI CALL
@@ -243,7 +171,7 @@ async function callAI(history: { role: string; content: string }[], memoryContex
   const openaiKey = Bun.env.OPENAI_API_KEY;
   const anthropicKey = Bun.env.ANTHROPIC_API_KEY;
 
-  const systemPrompt = AI_SYSTEM_PROMPT + memoryContext;
+  const systemPrompt = AI_SYSTEM_PROMPT + (memoryContext || "\n\nRELEVANT MEMORIES: none yet.");
 
   // Try OpenAI first
   if (openaiKey) {
@@ -441,7 +369,7 @@ export const sendMessageFn = createServerFn({ method: "POST" })
     } else {
       try {
         // Build memory context for this user
-        const memoryContext = isThrive ? buildMemoryContext(userId) : "";
+        const memoryContext = buildMemoryContext(userId, data.message);
         console.log("[Thriver] Calling AI with history length:", history.length, "memory:", !!memoryContext);
         response = await callAI(history, memoryContext);
         console.log("[Thriver] AI response received:", response.slice(0, 50) + "...");
@@ -457,13 +385,12 @@ export const sendMessageFn = createServerFn({ method: "POST" })
     userEntry.response = response;
 
     // Memory extraction — fire and forget for Thrive users
-    if (isThrive) {
-      try {
-        extractMemoriesFromMessage(userId, data.message, userEntry.id);
-      } catch (e) {
-        // Silent failure — memory extraction should never break the conversation
-        console.error("[Thriver] Memory extraction failed:", e);
-      }
+    try {
+      extractMemoriesFromMessage(userId, data.message, userEntry.id);
+      // A short continuity record after each exchange; summaries are intentionally compact.
+      saveConversationSummary(userId, `User discussed: ${data.message.slice(0, 180)} Assistant responded: ${response.slice(0, 220)}`, []);
+    } catch (e) {
+      console.error("[Thriver] Relational memory update failed:", e);
     }
 
     const newWeeklyCount = getConversationCountThisWeek(userId);
