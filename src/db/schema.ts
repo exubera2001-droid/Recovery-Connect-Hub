@@ -80,17 +80,28 @@ export interface GroupMessage {
   created_at: string;
 }
 
+export type MemoryType = "profile" | "people" | "episodic" | "insight" | "open_thread";
+
 export interface MemoryEntry {
   id: number;
   user_id: number;
-  type: "goal" | "theme" | "relationship" | "preference" | "breakthrough" | "struggle" | "fact";
+  type: MemoryType;
   key: string;
   content: string;
   confidence: number;
   source_conversation_id: number | null;
-  last_used_at: string;
+  last_accessed_at: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface ConversationSummary {
+  id: number;
+  user_id: number;
+  date: string;
+  summary: string;
+  key_topics: string;
+  created_at: string;
 }
 
 /** Public user data (no password hash) */
@@ -202,17 +213,28 @@ CREATE INDEX IF NOT EXISTS idx_group_messages_user ON group_messages(user_id, cr
 CREATE TABLE IF NOT EXISTS memory_entries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id),
-  type TEXT NOT NULL CHECK (type IN ('goal', 'theme', 'relationship', 'preference', 'breakthrough', 'struggle', 'fact')),
+  type TEXT NOT NULL CHECK (type IN ('profile', 'people', 'episodic', 'insight', 'open_thread')),
   key TEXT NOT NULL,
   content TEXT NOT NULL DEFAULT '{}',
   confidence REAL NOT NULL DEFAULT 0.5 CHECK (confidence >= 0 AND confidence <= 1),
   source_conversation_id INTEGER REFERENCES conversations(id),
-  last_used_at TEXT DEFAULT (datetime('now')),
+  last_accessed_at TEXT NOT NULL DEFAULT (datetime('now')),
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(user_id, type, key)
 );
 
 CREATE INDEX IF NOT EXISTS idx_memory_user ON memory_entries(user_id);
 CREATE INDEX IF NOT EXISTS idx_memory_user_type ON memory_entries(user_id, type);
 CREATE INDEX IF NOT EXISTS idx_memory_key ON memory_entries(user_id, key);
+
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  date TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  key_topics TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_summary_user ON conversation_summaries(user_id, created_at);
 `;
